@@ -20,33 +20,31 @@ const context = canvas.getContext('2d');
 
 // --- world ---
 
-// The canvas is square, so one internal resolution value describes both axes.
-// This is the backing-store size (1120), not the CSS display size.
-const canvasSize = canvas.width;
-const centerX = canvasSize / 2;
-const centerY = canvasSize / 2;
+// Backing-store size, not CSS display size. Both axes are read separately so
+// nothing downstream assumes the canvas is square.
+const canvasWidth = canvas.width;
+const canvasHeight = canvas.height;
+const centerX = canvasWidth / 2;
+const centerY = canvasHeight / 2;
 
 // 14px inset leaves room for the container's stroke, which is drawn centred
 // on the path and would otherwise be clipped at the canvas edge.
-const containerRadius = canvasSize / 2 - 14;
+const containerRadius = Math.min(canvasWidth, canvasHeight) / 2 - 14;
 
 // --- ball sizing ---
 
-// [minimum, maximum] radius for the two balls the sim starts with, and for
-// every ball born from a collision. Kept separate so children can be made
-// smaller or larger than seeds without touching the rest of the code.
-const seedRadiusRange = [6, 12];
-const childRadiusRange = [6, 12];
+// [minimum, maximum] radius for every ball, seed or newborn alike.
+const radiusRange = [6, 12];
 
 // Largest radius any ball can ever have. The broad-phase grid sizes its
-// cells off this, so it is derived rather than typed in a third time.
-const maxBallRadius = Math.max(seedRadiusRange[1], childRadiusRange[1]);
+// cells off this, so it is derived rather than typed in a second time.
+const maxBallRadius = radiusRange[1];
 
 // --- spawn-on-collision tuning ---
 
-// Hard population cap. Also the length of every fixed-size grid array below,
+// Hard population cap. Also, the length of every fixed-size grid array below,
 // so it cannot be exceeded at runtime.
-const maxBalls = 2500;
+const maxBalls = 2600;
 
 // A collision spawns a child only if the two balls are closing along the
 // contact normal faster than this (pixels/second). Glancing taps and resting
@@ -62,6 +60,20 @@ const spawnCooldown = 0.25;
 // inside both parents and gets shoved out at high speed, which would
 // otherwise read as a qualifying impact immediately.
 const birthLockout = 0.25;
+
+// --- seed traits ---
+// Restitution is kept below 1 and drag above 0 so the sim has somewhere for
+// energy to go. Every birth injects a fresh ball's kinetic energy plus a
+// tangential kick, and positional correction adds a little more; with
+// restitution pinned at 1 and drag at 0 the mean speed climbed without
+// bound. Two 6px balls have a 12px contact distance, so at 1/240s a relative
+// closing speed past 2880 px/s passes clean through with no overlap ever
+// detected — that is the wall this was heading for.
+//
+// These are also ranges rather than constants so the trait inheritance in
+// resolvePair() has something to actually vary.
+const seedRestitutionRange = [1.00, 1.00];
+const seedDragRange = [0.00, 0.00];
 
 // --- solver tuning ---
 
@@ -130,7 +142,7 @@ const balls = [];
 function spawnBall(options = {}) {
     if (balls.length >= maxBalls) return null;
 
-    const radius = options.radius ?? randomInt(seedRadiusRange[0], seedRadiusRange[1]);
+    const radius = options.radius ?? randomInt(radiusRange[0], radiusRange[1]);
 
     // Distance from the container center at which this ball's edge touches
     // the wall. Every position clamp below is against this, not the raw
@@ -185,22 +197,24 @@ function spawnBall(options = {}) {
 
         // Per-ball gravity, so the population drifts and separates instead of
         // falling as one block.
-        gravity: options.gravity ?? randomInt(50, 250),
+        gravity: options.gravity ?? randomInt(0, 100),
 
-        // 1 = perfectly elastic, energy preserved on bounce.
-        restitution: options.restitution ?? 1,
+        // 1 would be perfectly elastic. Seeds start just under it so bounces
+        // are a net energy sink; see the seed-traits block above.
+        restitution: options.restitution ?? randomFloat(seedRestitutionRange[0], seedRestitutionRange[1]),
 
         // Exponential velocity decay per second; 0 disables the exp() call.
-        drag: options.drag ?? 0,
+        drag: options.drag ?? randomFloat(seedDragRange[0], seedDragRange[1]),
 
         color,
 
         // Seconds remaining before this ball may take part in a birth.
         spawnLockout: options.spawnLockout ?? 0,
 
-        // Mass is proportional to area, so inverse mass is 1/r^2 with the
-        // constant factor dropped — only ratios between two balls matter in
-        // the impulse and positional-correction maths.
+        // Mass is proportional to area, so mass is r^2 with the constant
+        // factor dropped — only ratios between two balls matter in the
+        // impulse, positional-correction, and inheritance maths.
+        mass: radius * radius,
         inverseMass: 1 / (radius * radius),
 
         // Wall-clamp constants precomputed per ball: resolveWall runs for
@@ -234,8 +248,8 @@ const pendingSpawns = [];
 // flat Int32Arrays: no per-frame allocation, no array-of-arrays.
 const cellSize = maxBallRadius * 2;
 const inverseCellSize = 1 / cellSize;
-const gridColumns = Math.ceil(canvasSize / cellSize);
-const gridRows = gridColumns;                      // square canvas
+const gridColumns = Math.ceil(canvasWidth * inverseCellSize);
+const gridRows = Math.ceil(canvasHeight * inverseCellSize);
 const cellCount = gridColumns * gridRows;
 
 // cellStart[cell] is where that cell's ball indices begin in cellItems, and
@@ -378,17 +392,26 @@ function resolvePair(ballA, ballB, canSpawn) {
         const contactX = ballA.x + normalX * ballA.radius;
         const contactY = ballA.y + normalY * ballA.radius;
 
+        // Center-of-mass velocity of the pair, not the arithmetic mean.
+        // Radii span 6..12, so mass (r^2) can differ 4:1 and the plain mean
+        // biases the child toward the lighter, usually faster parent.
+        const totalMass = ballA.mass + ballB.mass;
+        const centerOfMassVelocityX =
+            (ballA.velocityX * ballA.mass + ballB.velocityX * ballB.mass) / totalMass;
+        const centerOfMassVelocityY =
+            (ballA.velocityY * ballA.mass + ballB.velocityY * ballB.mass) / totalMass;
+
         // Push the child sideways (perpendicular to the normal, direction
-        // chosen at random) on top of the parents' mean velocity, so it
-        // escapes the collision instead of sitting between the parents.
+        // chosen at random) on top of that, so it escapes the collision
+        // instead of sitting between the parents.
         const tangentialKick = randomFloat(120, 260) * (Math.random() < 0.5 ? -1 : 1);
 
         pendingSpawns.push({
             x: contactX,
             y: contactY,
-            velocityX: (ballA.velocityX + ballB.velocityX) / 2 - normalY * tangentialKick,
-            velocityY: (ballA.velocityY + ballB.velocityY) / 2 + normalX * tangentialKick,
-            radius: randomInt(childRadiusRange[0], childRadiusRange[1]),
+            velocityX: centerOfMassVelocityX - normalY * tangentialKick,
+            velocityY: centerOfMassVelocityY + normalX * tangentialKick,
+            radius: randomInt(radiusRange[0], radiusRange[1]),
 
             // Inherited traits: gravity averages, restitution and drag take
             // the more dissipative parent, so the population trends calmer.
@@ -510,7 +533,7 @@ context.strokeStyle = '#6f7d82';
 context.fillStyle = '#6f7d82';
 
 function draw() {
-    context.clearRect(0, 0, canvasSize, canvasSize);
+    context.clearRect(0, 0, canvasWidth, canvasHeight);
 
     context.beginPath();
     context.arc(centerX, centerY, containerRadius, 0, Math.PI * 2);
@@ -543,7 +566,9 @@ const physicsStep = 1 / 240;
 const collisionPasses = 2;
 
 // Ceiling on substeps per frame. Without it, a slow frame asks for more
-// steps, which makes the next frame slower still.
+// steps, which makes the next frame slower still. This is also what bounds
+// a long gap (backgrounded tab, paused debugger): at most 8/240s of physics
+// runs, and the leftover backlog is discarded below.
 const maxSubsteps = 8;
 
 // Leftover real time not yet consumed by a whole physics step.
@@ -551,12 +576,9 @@ let accumulator = 0;
 let lastFrameTime = performance.now();
 
 function frame(now) {
-    let elapsed = (now - lastFrameTime) / 1000;
+    const elapsed = (now - lastFrameTime) / 1000;
     lastFrameTime = now;
 
-    // Clamp long gaps (tab was backgrounded, debugger paused) so the sim does
-    // not try to catch up on minutes of missing time.
-    if (elapsed > 0.25) elapsed = 0.25;
     accumulator += elapsed;
 
     let substeps = 0;
@@ -587,9 +609,12 @@ function frame(now) {
         substeps++;
     }
 
-    // Ran out of substep budget: drop the backlog rather than carrying it
-    // into the next frame, where it would ask for even more steps.
-    if (substeps === maxSubsteps) accumulator = 0;
+    // Ran out of substep budget with time still owed: drop the backlog rather
+    // than carrying it into the next frame, where it would ask for even more
+    // steps. The accumulator check matters — without it, a frame that used
+    // all 8 steps and legitimately drained the accumulator would still throw
+    // away up to 4.2ms of sub-step time.
+    if (substeps === maxSubsteps && accumulator >= physicsStep) accumulator = 0;
 
     draw();
     requestAnimationFrame(frame);
