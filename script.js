@@ -1,5 +1,5 @@
 // =============================================================================
-// malthus — a 2D ball sim in a circular container. When two balls hit each
+// Malthus — a 2D ball sim in a circular container. When two balls hit each
 // other hard enough, a third ball is born at the contact point.
 //
 // Units: positions and radii are pixels in canvas space, velocities are
@@ -93,7 +93,7 @@ function randomFloat(minimum, maximum) {
 // --- sprite cache ---
 // Each (color, radius) pair gets rendered once into a small offscreen
 // canvas. draw() then does drawImage instead of beginPath/arc/fill plus a
-// fillStyle assignment (which re-parses the CSS color string) per ball.
+// fillStyle assignment (which reparses the CSS color string) per ball.
 const spriteCache = new Map();
 
 function getSprite(color, radius) {
@@ -125,14 +125,14 @@ function getSprite(color, radius) {
 // what the broad-phase grid stores.
 const balls = [];
 
-// `options` supplies any field explicitly; anything omitted is randomised.
+// `options` supplies any field explicitly; anything omitted is randomized.
 // Seed balls pass nothing, births pass everything.
 function spawnBall(options = {}) {
     if (balls.length >= maxBalls) return null;
 
     const radius = options.radius ?? randomInt(seedRadiusRange[0], seedRadiusRange[1]);
 
-    // Distance from the container centre at which this ball's edge touches
+    // Distance from the container center at which this ball's edge touches
     // the wall. Every position clamp below is against this, not the raw
     // container radius.
     const spawnLimit = containerRadius - radius;
@@ -170,7 +170,7 @@ function spawnBall(options = {}) {
         }
     }
 
-    // Quantising hue to `hueSteps` values keeps the sprite cache small; see
+    // Quantizing hue to `hueSteps` values keeps the sprite cache small; see
     // the comment on hueSteps above.
     const color = options.color ?? `hsl(${randomInt(0, hueSteps - 1) * (360 / hueSteps)} 70% 58%)`;
     const sprite = getSprite(color, radius);
@@ -212,7 +212,7 @@ function spawnBall(options = {}) {
         sprite,
 
         // Half the sprite's width, i.e. radius + padding. Cached because
-        // draw() subtracts it from the centre position for every ball.
+        // draw() subtracts it from the center position for every ball.
         spriteHalf: sprite.width / 2
     };
 
@@ -230,7 +230,7 @@ const pendingSpawns = [];
 
 // --- broad phase: uniform grid ---
 // Cell size is one max diameter, so any pair that can touch is within the
-// 3x3 neighbourhood of a ball's own cell. Storage is a counting sort into
+// 3x3 neighborhood of a ball's own cell. Storage is a counting sort into
 // flat Int32Arrays: no per-frame allocation, no array-of-arrays.
 const cellSize = maxBallRadius * 2;
 const inverseCellSize = 1 / cellSize;
@@ -252,7 +252,7 @@ const ballCell = new Int32Array(maxBalls);
 // Ball indices sorted by cell, i.e. every cell's members are contiguous.
 const cellItems = new Int32Array(maxBalls);
 
-// Half of the 3x3 neighbourhood: E, SW, S, SE. Walking cells in row-major
+// Half of the 3x3 neighborhood: E, SW, S, SE. Walking cells in row-major
 // order and only looking forward visits every pair exactly once, so the
 // "j <= i" rejection test disappears along with half the candidate visits.
 const forwardColumnOffsets = [1, -1, 0, 1];
@@ -330,7 +330,7 @@ function resolvePair(ballA, ballB, canSpawn) {
 
     let distance = Math.sqrt(distanceSquared);
 
-    // Exactly concentric centres give no usable direction. Pick an arbitrary
+    // Exactly concentric centers give no usable direction. Pick an arbitrary
     // axis and a nonzero distance so the divisions below stay finite.
     if (distance === 0) {
         offsetX = 1;
@@ -338,7 +338,7 @@ function resolvePair(ballA, ballB, canSpawn) {
         distance = 0.0001;
     }
 
-    // Unit vector from A's centre toward B's.
+    // Unit vector from A's center toward B's.
     const normalX = offsetX / distance;
     const normalY = offsetY / distance;
 
@@ -347,7 +347,7 @@ function resolvePair(ballA, ballB, canSpawn) {
 
     if (overlap > penetrationSlop) {
         // Split the correction in proportion to inverse mass, so the smaller
-        // ball moves further and the pair's centre of mass stays put.
+        // ball moves further and the pair's center of mass stays put.
         const correction =
             (overlap - penetrationSlop) * correctionPercent / totalInverseMass;
 
@@ -374,7 +374,7 @@ function resolvePair(ballA, ballB, canSpawn) {
         -relativeNormalSpeed > spawnImpactSpeed &&
         ballA.spawnLockout <= 0 && ballB.spawnLockout <= 0) {
 
-        // Contact point: one radius from A's centre along the normal.
+        // Contact point: one radius from A's center along the normal.
         const contactX = ballA.x + normalX * ballA.radius;
         const contactY = ballA.y + normalY * ballA.radius;
 
@@ -414,7 +414,7 @@ function resolvePair(ballA, ballB, canSpawn) {
 }
 
 // Walks the grid in row-major order, testing each cell against itself and
-// against its four forward neighbours.
+// against its four forward neighbors.
 //
 // Positional correction moves balls after the grid was built, but only by
 // the overlap amount, and the 3x3 span has a full cell of slack — anything
@@ -437,7 +437,7 @@ function resolveBallCollisions(canSpawn) {
                 }
             }
 
-            // this cell against the four forward neighbours
+            // this cell against the four forward neighbors
             for (let neighbour = 0; neighbour < 4; neighbour++) {
                 const neighbourColumn = column + forwardColumnOffsets[neighbour];
                 const neighbourRow = row + forwardRowOffsets[neighbour];
@@ -465,7 +465,7 @@ function resolveBallCollisions(canSpawn) {
 
 // --- ball vs. wall ---
 // The container is a circle, so the wall normal at any contact is just the
-// direction from the centre to the ball.
+// direction from the center to the ball.
 function resolveWall(ball) {
     const offsetX = ball.x - centerX;
     const offsetY = ball.y - centerY;
